@@ -35,10 +35,10 @@ type simpleIter struct {
 }
 
 // NewIterator creates a new iterator around rows.
-func NewIterator(rows *sql.Rows, scanFn ScanFunc) Iterator {
+func NewIterator(rows *sql.Rows, scan ScanFunc) Iterator {
 	return &simpleIter{
 		rows: rows,
-		sfn:  scanFn,
+		sfn:  scan,
 	}
 }
 
@@ -94,11 +94,11 @@ type batchIter struct {
 }
 
 // NewBatchIterator creates a new batch iterator around rows.
-func NewBatchIterator(rows *sql.Rows, batchSize int, scanFn ScanFunc, trfmFn TransformFunc) Iterator {
+func NewBatchIterator(rows *sql.Rows, batchSize int, scan ScanFunc, transform TransformFunc) Iterator {
 	return &batchIter{
 		rows: rows,
-		sfn:  scanFn,
-		tfn:  trfmFn,
+		sfn:  scan,
+		tfn:  transform,
 		cur:  -1,
 		lim:  batchSize,
 	}
@@ -165,7 +165,7 @@ func (i *batchIter) next() error {
 	if err := i.rows.Err(); err != nil {
 		return err
 	}
-	if i.tfn != nil {
+	if i.tfn != nil && len(i.batch) != 0 {
 		if err := i.tfn(i.batch); err != nil {
 			return err
 		}
