@@ -1,6 +1,8 @@
 package dbx
 
-import "database/sql"
+import (
+	"database/sql"
+)
 
 // Iterator is used to iterate over records
 type Iterator interface {
@@ -13,12 +15,6 @@ type Iterator interface {
 	// Close closes the underlying rows and
 	// release
 	Close() error
-}
-
-// RowScanner is a simplified abstraction of sql.Rows
-type RowScanner interface {
-	// Scan scans the row into dest
-	Scan(dest ...interface{}) error
 }
 
 // --------------------------------------------------------------------
@@ -149,16 +145,22 @@ func (i *batchIter) Close() error {
 	return i.rows.Close()
 }
 
-func (i *batchIter) next() error {
+func (i *batchIter) reset(rows *sql.Rows) {
 	i.batch = i.batch[:0]
 	i.cur = -1
+	i.rows = rows
+	i.done = false
+}
+
+func (i *batchIter) next() error {
+	i.reset(i.rows)
 
 	for i.rows.Next() {
 		rec, err := i.sfn(i.rows)
 		if err != nil {
 			return err
 		}
-		if i.batch = append(i.batch, rec); len(i.batch) >= i.lim {
+		if i.batch = append(i.batch, rec); i.lim > 0 && len(i.batch) >= i.lim {
 			break
 		}
 	}
@@ -170,5 +172,55 @@ func (i *batchIter) next() error {
 			return err
 		}
 	}
+	return nil
+}
+
+// --------------------------------------------------------------------
+
+type QueryFunc func() (*sql.Rows, error)
+
+type chunkIter struct {
+	query QueryFunc
+	fresh bool
+
+	*batchIter
+}
+
+// NewChunkIterator creates a new chunk iterator
+func NewChunkIterator(factory QueryFunc, batchSize int, scan ScanFunc, transform TransformFunc) Iterator {
+	parent := NewBatchIterator(nil, batchSize, scan, transform)
+	return &chunkIter{
+		query:     factory,
+		batchIter: parent.(*batchIter),
+	}
+}
+
+// Next implements Iterator
+func (i *chunkIter) Next() bool {
+	if i.rows == nil {
+		if err := i.nextChunk(); err != nil {
+			i.err = err
+			return false
+		}
+	}
+
+	if i.batchIter.Next() {
+		i.fresh = false
+		return true
+	} else if i.fresh {
+		return false
+	} else {
+		i.rows = nil
+		return i.Next()
+	}
+}
+
+func (i *chunkIter) nextChunk() error {
+	rows, err := i.query()
+	if err != nil {
+		return err
+	}
+	i.reset(rows)
+	i.fresh = true
 	return nil
 }
