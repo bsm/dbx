@@ -1,6 +1,7 @@
 package dbx_test
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -135,4 +136,50 @@ func ExampleNewBatchIterator() {
 	// &{ID:321 Title:Post 321 Comments:[]}
 	// &{ID:642 Title:Post 642 Comments:[{ID:769 PostID:642 Message:Comment 642/1}]}
 	// &{ID:963 Title:Post 963 Comments:[{ID:1154 PostID:963 Message:Comment 963/1} {ID:1155 PostID:963 Message:Comment 963/2}]}
+}
+
+func ExampleNewIncrementalIterator() {
+	// Create tables, seed some test data
+	db, err := setupTestDB()
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+
+	// Scan each Post row into a struct (callback)
+	scanPost := func(rs dbx.RowScanner) (interface{}, error) {
+		post := new(Post)
+		if err := rs.Scan(&post.ID, &post.Title); err != nil {
+			return nil, err
+		}
+		return post, nil
+	}
+
+	// Init an iterator AND defer Close()
+	lastID := int64(0)
+	iter := dbx.NewIncrementalIterator(func() (*sql.Rows, error) {
+		return db.Query(`SELECT id, title FROM posts WHERE id > ? ORDER BY id LIMIT 400`, lastID)
+	}, scanPost, nil)
+	defer iter.Close()
+
+	// Iterate over records, update lastID
+	n := 0
+	for iter.Next() {
+		post := iter.Record().(*Post)
+		lastID = post.ID
+
+		if n++; n%321 == 0 {
+			fmt.Printf("%+v\n", post)
+		}
+	}
+
+	// Check for iterator errors
+	if err := iter.Err(); err != nil {
+		panic(err)
+	}
+
+	// Output:
+	// &{ID:321 Title:Post 321 Comments:[]}
+	// &{ID:642 Title:Post 642 Comments:[]}
+	// &{ID:963 Title:Post 963 Comments:[]}
 }

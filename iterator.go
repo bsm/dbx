@@ -177,26 +177,26 @@ func (i *batchIter) next() error {
 
 // --------------------------------------------------------------------
 
-type QueryFunc func() (*sql.Rows, error)
+type QueryFactory func() (*sql.Rows, error)
 
-type chunkIter struct {
-	query QueryFunc
+type incrIter struct {
+	query QueryFactory
 	fresh bool
 
 	*batchIter
 }
 
-// NewChunkIterator creates a new chunk iterator
-func NewChunkIterator(factory QueryFunc, batchSize int, scan ScanFunc, transform TransformFunc) Iterator {
-	parent := NewBatchIterator(nil, batchSize, scan, transform)
-	return &chunkIter{
-		query:     factory,
+// NewIncrementalIterator creates a new incremental iterator.
+func NewIncrementalIterator(nextChunk QueryFactory, scan ScanFunc, transform TransformFunc) Iterator {
+	parent := NewBatchIterator(nil, -1, scan, transform)
+	return &incrIter{
+		query:     nextChunk,
 		batchIter: parent.(*batchIter),
 	}
 }
 
 // Next implements Iterator
-func (i *chunkIter) Next() bool {
+func (i *incrIter) Next() bool {
 	if i.rows == nil {
 		if err := i.nextChunk(); err != nil {
 			i.err = err
@@ -215,7 +215,7 @@ func (i *chunkIter) Next() bool {
 	}
 }
 
-func (i *chunkIter) nextChunk() error {
+func (i *incrIter) nextChunk() error {
 	rows, err := i.query()
 	if err != nil {
 		return err

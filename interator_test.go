@@ -86,27 +86,45 @@ var _ = Describe("Iterator", func() {
 		Expect(iter.Close()).To(Succeed())
 
 		Expect(posts).To(HaveLen(1234))
-		Expect(posts[432]).To(Equal(&Post{
-			ID:    433,
-			Title: "Post 433",
-			Comments: []Comment{
-				{ID: 518, PostID: 433, Message: "Comment 433/1"},
-				{ID: 519, PostID: 433, Message: "Comment 433/2"},
+		Expect([]*Post{posts[13], posts[432], posts[1231]}).To(Equal([]*Post{
+			{
+				ID:    14,
+				Title: "Post 14",
+				Comments: []Comment{
+					{ID: 16, PostID: 14, Message: "Comment 14/1"},
+					{ID: 17, PostID: 14, Message: "Comment 14/2"},
+					{ID: 18, PostID: 14, Message: "Comment 14/3"},
+				},
+			},
+			{
+				ID:    433,
+				Title: "Post 433",
+				Comments: []Comment{
+					{ID: 518, PostID: 433, Message: "Comment 433/1"},
+					{ID: 519, PostID: 433, Message: "Comment 433/2"},
+				},
+			},
+			{
+				ID:    1232,
+				Title: "Post 1232",
+				Comments: []Comment{
+					{ID: 1477, PostID: 1232, Message: "Comment 1232/1"},
+				},
 			},
 		}))
 		Expect(scanCount).To(Equal(1234))
 		Expect(transformCount).To(Equal(7))
 	})
 
-	It("should iterate over query chunks", func() {
+	It("should iterate incrementally", func() {
 		lastID := int64(0)
 		queryQueues := make([]int64, 0)
 
-		iter := dbx.NewChunkIterator(func() (*sql.Rows, error) {
+		iter := dbx.NewIncrementalIterator(func() (*sql.Rows, error) {
 			queryQueues = append(queryQueues, lastID)
 
 			return testDB.Query(`SELECT id, title FROM posts WHERE id > ? ORDER BY id LIMIT 300`, lastID)
-		}, 500, scanFunc, transformFunc)
+		}, scanFunc, transformFunc)
 		defer iter.Close()
 
 		var posts []*Post
@@ -119,12 +137,30 @@ var _ = Describe("Iterator", func() {
 		Expect(iter.Close()).To(Succeed())
 
 		Expect(posts).To(HaveLen(1234))
-		Expect(posts[432]).To(Equal(&Post{
-			ID:    433,
-			Title: "Post 433",
-			Comments: []Comment{
-				{ID: 518, PostID: 433, Message: "Comment 433/1"},
-				{ID: 519, PostID: 433, Message: "Comment 433/2"},
+		Expect([]*Post{posts[13], posts[432], posts[1231]}).To(Equal([]*Post{
+			{
+				ID:    14,
+				Title: "Post 14",
+				Comments: []Comment{
+					{ID: 16, PostID: 14, Message: "Comment 14/1"},
+					{ID: 17, PostID: 14, Message: "Comment 14/2"},
+					{ID: 18, PostID: 14, Message: "Comment 14/3"},
+				},
+			},
+			{
+				ID:    433,
+				Title: "Post 433",
+				Comments: []Comment{
+					{ID: 518, PostID: 433, Message: "Comment 433/1"},
+					{ID: 519, PostID: 433, Message: "Comment 433/2"},
+				},
+			},
+			{
+				ID:    1232,
+				Title: "Post 1232",
+				Comments: []Comment{
+					{ID: 1477, PostID: 1232, Message: "Comment 1232/1"},
+				},
 			},
 		}))
 		Expect(scanCount).To(Equal(1234))
