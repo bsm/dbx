@@ -20,8 +20,14 @@ import (
 )
 
 func main() {
+	// Init a temp dir
+	dir, err := os.MkdirTemp("", "dbx-example")
+	if err != nil {
+		panic(err)
+	}
+
 	// Create tables, seed some test data
-	db, err := setupTestDB()
+	db, err := setupTestDB(dir)
 	if err != nil {
 		panic(err)
 	}
@@ -71,8 +77,14 @@ import (
 )
 
 func main() {
+	// Init a temp dir
+	dir, err := os.MkdirTemp("", "dbx-example")
+	if err != nil {
+		panic(err)
+	}
+
 	// Create tables, seed some test data
-	db, err := setupTestDB()
+	db, err := setupTestDB(dir)
 	if err != nil {
 		panic(err)
 	}

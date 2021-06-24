@@ -3,55 +3,14 @@ package dbx_test
 import (
 	"database/sql"
 	"fmt"
-	"io/ioutil"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/bsm/dbx"
 	_ "github.com/mattn/go-sqlite3"
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
 )
 
-func TestSuite(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "dbx")
-}
-
-var _ = BeforeSuite(func() {
-	var err error
-
-	testDB, err = setupTestDB()
-	Expect(err).NotTo(HaveOccurred())
-})
-
-var _ = AfterSuite(func() {
-	Expect(testDB.Close()).To(Succeed())
-})
-
-// --------------------------------------------------------------------
-
-var testDB *TestDB
-
-type TestDB struct {
-	*sql.DB
-	dir string
-}
-
-func (db *TestDB) Close() error {
-	err := db.DB.Close()
-	_ = os.RemoveAll(db.dir)
-	return err
-}
-
-func setupTestDB() (*TestDB, error) {
-	dir, err := ioutil.TempDir("", "dbx-test")
-	if err != nil {
-		return nil, err
-	}
-
+func setupTestDB(dir string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite3", filepath.Join(dir, "test.sqlite3"))
 	if err != nil {
 		return nil, err
@@ -105,7 +64,7 @@ func setupTestDB() (*TestDB, error) {
 		return nil, err
 	}
 
-	return &TestDB{DB: db, dir: dir}, nil
+	return db, nil
 }
 
 // --------------------------------------------------------------------
@@ -124,6 +83,25 @@ func scanPost(rs dbx.RowScanner) (interface{}, error) {
 	return post, nil
 }
 
+func drainPosts(t *testing.T, iter dbx.Iterator, each func(*Post)) (posts []*Post) {
+	t.Helper()
+
+	for iter.Next() {
+		post := iter.Record().(*Post)
+		if each != nil {
+			each(post)
+		}
+		posts = append(posts, post)
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := iter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return posts
+}
+
 type Comment struct {
 	ID      int64
 	PostID  int64
@@ -136,36 +114,4 @@ func scanComment(rs dbx.RowScanner) (interface{}, error) {
 		return nil, err
 	}
 	return comment, nil
-}
-
-func transformPosts(recs []interface{}) error {
-	postMap := make(map[int64]*Post, len(recs))
-	postIDs := make([]interface{}, 0, len(recs))
-
-	for _, rec := range recs {
-		post := rec.(*Post)
-		postMap[post.ID] = post
-		postIDs = append(postIDs, post.ID)
-	}
-
-	rows, err := testDB.Query(`
-    SELECT id, post_id, message
-    FROM comments
-    WHERE post_id IN (?`+strings.Repeat(",?", len(postIDs)-1)+`)`,
-		postIDs...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		val, err := scanComment(rows)
-		if err != nil {
-			return err
-		}
-		comment := val.(*Comment)
-		post := postMap[comment.PostID]
-		post.Comments = append(post.Comments, *comment)
-	}
-	return rows.Err()
 }

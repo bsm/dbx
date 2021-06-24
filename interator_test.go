@@ -2,169 +2,193 @@ package dbx_test
 
 import (
 	"database/sql"
+	"reflect"
+	"strings"
+	"testing"
 
 	"github.com/bsm/dbx"
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Iterator", func() {
-	var (
-		scanCount int
-		scanFunc  = func(rs dbx.RowScanner) (interface{}, error) {
-			scanCount++
-			return scanPost(rs)
-		}
+func TestIterator(t *testing.T) {
+	db, err := setupTestDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
 
-		transformCount int
-		transformFunc  = func(recs []interface{}) error {
-			transformCount++
-			return transformPosts(recs)
-		}
-	)
+	rows, err := db.Query(`SELECT id, title FROM posts`)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	BeforeEach(func() {
-		scanCount = 0
-		transformCount = 0
+	var scanCount int
+	iter := dbx.NewIterator(rows, func(rs dbx.RowScanner) (interface{}, error) {
+		scanCount++
+		return scanPost(rs)
 	})
+	defer iter.Close()
 
-	It("should iterate", func() {
-		rows, err := testDB.Query(`SELECT id, title FROM posts`)
-		Expect(err).NotTo(HaveOccurred())
+	posts := drainPosts(t, iter, nil)
+	if exp, got := 1234, scanCount; exp != got {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+	if exp, got := 1234, len(posts); exp != got {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+	if exp, got := (&Post{ID: 433, Title: "Post 433"}), posts[432]; !reflect.DeepEqual(exp, got) {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+}
 
-		iter := dbx.NewIterator(rows, scanFunc)
-		defer iter.Close()
+func TestIterator_batch(t *testing.T) {
+	db, err := setupTestDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
 
-		var posts []*Post
-		for iter.Next() {
-			posts = append(posts, iter.Record().(*Post))
+	rows, err := db.Query(`SELECT id, title FROM posts`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var scanCount int
+	iter := dbx.NewBatchIterator(rows, 200, func(rs dbx.RowScanner) (interface{}, error) {
+		scanCount++
+		return scanPost(rs)
+	}, nil)
+	defer iter.Close()
+
+	posts := drainPosts(t, iter, nil)
+	if exp, got := 1234, scanCount; exp != got {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+	if exp, got := 1234, len(posts); exp != got {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+	if exp, got := (&Post{ID: 433, Title: "Post 433"}), posts[432]; !reflect.DeepEqual(exp, got) {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+}
+
+func TestIterator_batchWithTransform(t *testing.T) {
+	db, err := setupTestDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`SELECT id, title FROM posts`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var scanCount, transformCount int
+	iter := dbx.NewBatchIterator(rows, 200, func(rs dbx.RowScanner) (interface{}, error) {
+		scanCount++
+		return scanPost(rs)
+	}, func(recs []interface{}) error {
+		transformCount++
+
+		postMap := make(map[int64]*Post, len(recs))
+		postIDs := make([]interface{}, 0, len(recs))
+
+		for _, rec := range recs {
+			post := rec.(*Post)
+			postMap[post.ID] = post
+			postIDs = append(postIDs, post.ID)
 		}
-		Expect(iter.Err()).NotTo(HaveOccurred())
-		Expect(iter.Close()).To(Succeed())
 
-		Expect(posts).To(HaveLen(1234))
-		Expect(posts[432]).To(Equal(&Post{
-			ID: 433, Title: "Post 433",
-		}))
-		Expect(scanCount).To(Equal(1234))
-	})
-
-	It("should iterate over batches", func() {
-		rows, err := testDB.Query(`SELECT id, title FROM posts`)
-		Expect(err).NotTo(HaveOccurred())
-
-		iter := dbx.NewBatchIterator(rows, 200, scanFunc, nil)
-		defer iter.Close()
-
-		var posts []*Post
-		for iter.Next() {
-			posts = append(posts, iter.Record().(*Post))
+		rows, err := db.Query(`SELECT id, post_id, message FROM comments WHERE post_id IN (?`+strings.Repeat(",?", len(postIDs)-1)+`)`, postIDs...)
+		if err != nil {
+			return err
 		}
-		Expect(iter.Err()).NotTo(HaveOccurred())
-		Expect(iter.Close()).To(Succeed())
+		defer rows.Close()
 
-		Expect(posts).To(HaveLen(1234))
-		Expect(posts[432]).To(Equal(&Post{
-			ID:    433,
-			Title: "Post 433",
-		}))
-		Expect(scanCount).To(Equal(1234))
-	})
-
-	It("should iterate over batches with transform", func() {
-		rows, err := testDB.Query(`SELECT id, title FROM posts`)
-		Expect(err).NotTo(HaveOccurred())
-
-		iter := dbx.NewBatchIterator(rows, 200, scanFunc, transformFunc)
-		defer iter.Close()
-
-		var posts []*Post
-		for iter.Next() {
-			posts = append(posts, iter.Record().(*Post))
+		for rows.Next() {
+			val, err := scanComment(rows)
+			if err != nil {
+				return err
+			}
+			comment := val.(*Comment)
+			post := postMap[comment.PostID]
+			post.Comments = append(post.Comments, *comment)
 		}
-		Expect(iter.Err()).NotTo(HaveOccurred())
-		Expect(iter.Close()).To(Succeed())
-
-		Expect(posts).To(HaveLen(1234))
-		Expect([]*Post{posts[13], posts[432], posts[1231]}).To(Equal([]*Post{
-			{
-				ID:    14,
-				Title: "Post 14",
-				Comments: []Comment{
-					{ID: 16, PostID: 14, Message: "Comment 14/1"},
-					{ID: 17, PostID: 14, Message: "Comment 14/2"},
-					{ID: 18, PostID: 14, Message: "Comment 14/3"},
-				},
-			},
-			{
-				ID:    433,
-				Title: "Post 433",
-				Comments: []Comment{
-					{ID: 518, PostID: 433, Message: "Comment 433/1"},
-					{ID: 519, PostID: 433, Message: "Comment 433/2"},
-				},
-			},
-			{
-				ID:    1232,
-				Title: "Post 1232",
-				Comments: []Comment{
-					{ID: 1477, PostID: 1232, Message: "Comment 1232/1"},
-				},
-			},
-		}))
-		Expect(scanCount).To(Equal(1234))
-		Expect(transformCount).To(Equal(7))
+		return rows.Err()
 	})
+	defer iter.Close()
 
-	It("should iterate incrementally", func() {
-		lastID := int64(0)
-		queryQueues := make([]int64, 0)
+	posts := drainPosts(t, iter, nil)
+	if exp, got := 1234, scanCount; exp != got {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+	if exp, got := 7, transformCount; exp != got {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+	if exp, got := 1234, len(posts); exp != got {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+	if exp, got := (&Post{
+		ID: 14, Title: "Post 14",
+		Comments: []Comment{
+			{ID: 16, PostID: 14, Message: "Comment 14/1"},
+			{ID: 17, PostID: 14, Message: "Comment 14/2"},
+			{ID: 18, PostID: 14, Message: "Comment 14/3"},
+		},
+	}), posts[13]; !reflect.DeepEqual(exp, got) {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+	if exp, got := (&Post{
+		ID: 433, Title: "Post 433",
+		Comments: []Comment{
+			{ID: 518, PostID: 433, Message: "Comment 433/1"},
+			{ID: 519, PostID: 433, Message: "Comment 433/2"},
+		},
+	}), posts[432]; !reflect.DeepEqual(exp, got) {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+	if exp, got := (&Post{
+		ID: 1232, Title: "Post 1232",
+		Comments: []Comment{
+			{ID: 1477, PostID: 1232, Message: "Comment 1232/1"},
+		},
+	}), posts[1231]; !reflect.DeepEqual(exp, got) {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+}
 
-		iter := dbx.NewIncrementalIterator(func() (*sql.Rows, error) {
-			queryQueues = append(queryQueues, lastID)
+func TestIterator_incremental(t *testing.T) {
+	db, err := setupTestDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
 
-			return testDB.Query(`SELECT id, title FROM posts WHERE id > ? ORDER BY id LIMIT 300`, lastID)
-		}, scanFunc, transformFunc)
-		defer iter.Close()
+	var lastID int64
+	var markers []int64
+	var scanCount int
 
-		var posts []*Post
-		for iter.Next() {
-			post := iter.Record().(*Post)
-			lastID = post.ID
-			posts = append(posts, post)
-		}
-		Expect(iter.Err()).NotTo(HaveOccurred())
-		Expect(iter.Close()).To(Succeed())
+	iter := dbx.NewIncrementalIterator(func() (*sql.Rows, error) {
+		markers = append(markers, lastID)
 
-		Expect(posts).To(HaveLen(1234))
-		Expect([]*Post{posts[13], posts[432], posts[1231]}).To(Equal([]*Post{
-			{
-				ID:    14,
-				Title: "Post 14",
-				Comments: []Comment{
-					{ID: 16, PostID: 14, Message: "Comment 14/1"},
-					{ID: 17, PostID: 14, Message: "Comment 14/2"},
-					{ID: 18, PostID: 14, Message: "Comment 14/3"},
-				},
-			},
-			{
-				ID:    433,
-				Title: "Post 433",
-				Comments: []Comment{
-					{ID: 518, PostID: 433, Message: "Comment 433/1"},
-					{ID: 519, PostID: 433, Message: "Comment 433/2"},
-				},
-			},
-			{
-				ID:    1232,
-				Title: "Post 1232",
-				Comments: []Comment{
-					{ID: 1477, PostID: 1232, Message: "Comment 1232/1"},
-				},
-			},
-		}))
-		Expect(scanCount).To(Equal(1234))
-		Expect(queryQueues).To(Equal([]int64{0, 300, 600, 900, 1200, 1234}))
-	})
+		return db.Query(`SELECT id, title FROM posts WHERE id > ? ORDER BY id LIMIT 300`, lastID)
+	}, func(rs dbx.RowScanner) (interface{}, error) {
+		scanCount++
+		return scanPost(rs)
+	}, nil)
+	defer iter.Close()
 
-})
+	posts := drainPosts(t, iter, func(post *Post) { lastID = post.ID })
+	if exp, got := 1234, scanCount; exp != got {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+	if exp, got := []int64{0, 300, 600, 900, 1200, 1234}, markers; !reflect.DeepEqual(exp, got) {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+	if exp, got := 1234, len(posts); exp != got {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+	if exp, got := (&Post{ID: 433, Title: "Post 433"}), posts[432]; !reflect.DeepEqual(exp, got) {
+		t.Fatalf("expected %v, got %v", exp, got)
+	}
+}
