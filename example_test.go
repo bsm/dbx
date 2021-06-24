@@ -3,14 +3,21 @@ package dbx_test
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/bsm/dbx"
 )
 
 func ExampleNewIterator() {
+	// Init a temp dir
+	dir, err := os.MkdirTemp("", "dbx-example")
+	if err != nil {
+		panic(err)
+	}
+
 	// Create tables, seed some test data
-	db, err := setupTestDB()
+	db, err := setupTestDB(dir)
 	if err != nil {
 		panic(err)
 	}
@@ -53,8 +60,14 @@ func ExampleNewIterator() {
 }
 
 func ExampleNewBatchIterator() {
+	// Init a temp dir
+	dir, err := os.MkdirTemp("", "dbx-example")
+	if err != nil {
+		panic(err)
+	}
+
 	// Create tables, seed some test data
-	db, err := setupTestDB()
+	db, err := setupTestDB(dir)
 	if err != nil {
 		panic(err)
 	}
@@ -139,8 +152,14 @@ func ExampleNewBatchIterator() {
 }
 
 func ExampleNewIncrementalIterator() {
+	// Init a temp dir
+	dir, err := os.MkdirTemp("", "dbx-example")
+	if err != nil {
+		panic(err)
+	}
+
 	// Create tables, seed some test data
-	db, err := setupTestDB()
+	db, err := setupTestDB(dir)
 	if err != nil {
 		panic(err)
 	}
